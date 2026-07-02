@@ -1,0 +1,25 @@
+#!/bin/sh
+# Block commits with unformatted/lint-failing TS/JSON.
+# Resolves the Biome binary from the main worktree's node_modules so it also
+# works inside git worktrees (which have no node_modules of their own).
+set -eu
+
+files=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.(ts|tsx|json)$' || true)
+[ -z "${files:-}" ] && exit 0
+
+common=$(git rev-parse --git-common-dir)
+biome=""
+for cand in "node_modules/.bin/biome" "$common/../node_modules/.bin/biome"; do
+  if [ -x "$cand" ]; then
+    biome="$cand"
+    break
+  fi
+done
+
+if [ -z "$biome" ]; then
+  echo "pre-commit: biome binary not found; run 'npm install'." >&2
+  exit 1
+fi
+
+# shellcheck disable=SC2086
+echo "$files" | xargs "$biome" check --error-on-warnings --no-errors-on-unmatched
