@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { SEED } from "../src/config.js";
+import { loadConfig, SEED } from "../src/config.js";
 import { formatReport } from "../src/report.js";
 import { detectProfiles, truncateTail } from "../src/runner.js";
 import type { ProfileResult } from "../src/types.js";
@@ -44,6 +44,20 @@ test("truncateTail: long output is trimmed to the tail", () => {
   assert.equal(truncated, true);
   assert.equal(totalLines, 200);
   assert.ok(preview.split("\n").length <= 50, "preview must keep at most 50 lines");
+});
+
+test("truncateTail: a trailing newline is not counted as an extra line", () => {
+  const { preview, truncated, totalLines } = truncateTail("a\nb\n");
+  assert.equal(totalLines, 2);
+  assert.equal(truncated, false);
+  assert.equal(preview, "a\nb");
+});
+
+test("truncateTail: exactly 50 lines with a trailing newline is not truncated", () => {
+  const input = `${Array.from({ length: 50 }, (_, i) => `line ${i + 1}`).join("\n")}\n`;
+  const { truncated, totalLines } = truncateTail(input);
+  assert.equal(totalLines, 50);
+  assert.equal(truncated, false);
 });
 
 test("formatReport: failing run surfaces every command state", () => {
@@ -105,6 +119,7 @@ test("formatReport: failing run surfaces every command state", () => {
   assert.ok(report.includes("--- FAIL: TestThing"), "failure preview text");
   assert.ok(report.includes("[truncated"), "truncation marker");
   assert.ok(report.includes("/tmp/verify/go-test.log"), "truncation log path");
+  assert.ok(report.includes("## go (2/3)"), "header counts ran (passed+failed), not just passed");
   assert.ok(report.includes("skipped after failure"), "skipped command note");
   assert.match(report, /## node[^\n]*all passed/, "passing profile one-liner");
 });
@@ -114,4 +129,26 @@ test("formatReport: no matches lists the known markers", () => {
   assert.ok(report.includes("no matching profiles"));
   assert.ok(report.includes("go.mod"));
   assert.ok(report.includes("package.json"));
+});
+
+test("loadConfig: rejects a wrong-shaped config (commands as a bare string)", () => {
+  const cfgPath = path.join(tempDir(), "verify-mcp.json");
+  fs.writeFileSync(
+    cfgPath,
+    JSON.stringify({
+      timeoutMs: 600000,
+      profiles: { node: { markers: ["package.json"], commands: "npm test" } },
+    }),
+  );
+  const prev = process.env.VERIFY_MCP_CONFIG;
+  process.env.VERIFY_MCP_CONFIG = cfgPath;
+  try {
+    assert.throws(() => loadConfig(), /Invalid config schema/);
+  } finally {
+    if (prev === undefined) {
+      delete process.env.VERIFY_MCP_CONFIG;
+    } else {
+      process.env.VERIFY_MCP_CONFIG = prev;
+    }
+  }
 });

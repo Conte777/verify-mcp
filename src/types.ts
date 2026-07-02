@@ -15,7 +15,7 @@ export type CommandStatus = "passed" | "failed" | "skipped";
 export interface CommandResult {
   command: string;
   status: CommandStatus;
-  /** Process exit code; null when killed (e.g. timeout). */
+  /** Process exit code; null when the process was killed (e.g. timeout) or failed to spawn. */
   exitCode: number | null;
   durationMs: number;
   timedOut: boolean;

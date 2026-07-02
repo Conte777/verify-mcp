@@ -5,7 +5,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { loadConfig } from "./config.js";
 import { formatReport } from "./report.js";
-import { runAll } from "./runner.js";
+import { killActiveChildren, runAll } from "./runner.js";
 
 const server = new McpServer({ name: "verify-mcp", version: "0.1.0" });
 
@@ -49,6 +49,14 @@ server.registerTool(
     }
   },
 );
+
+// Kill any still-running check process groups instead of orphaning them on shutdown.
+const shutdown = () => {
+  killActiveChildren();
+  process.exit(0);
+};
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);
 
 const transport = new StdioServerTransport();
 await server.connect(transport);

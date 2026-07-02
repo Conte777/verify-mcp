@@ -4,6 +4,25 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CommandResult, CommandStatus, Config, Profile, ProfileResult } from "./types.js";
 
+// ponytail: keep at most the last ~8MB of a command's output so a runaway command
+// (endless log spew) can't grow the server's memory without bound before the timeout.
+const MAX_CAPTURE_BYTES = 8 * 1024 * 1024;
+
+// Process groups (detached child pids) still running, so they can be killed if the
+// server is shut down mid-run instead of being orphaned.
+const activeGroups = new Set<number>();
+
+export function killActiveChildren(): void {
+  for (const pid of activeGroups) {
+    try {
+      process.kill(-pid, "SIGKILL");
+    } catch {
+      // Already exited (ESRCH).
+    }
+  }
+  activeGroups.clear();
+}
+
 export function detectProfiles(dir: string, config: Config): string[] {
   const matched: string[] = [];
   for (const [name, profile] of Object.entries(config.profiles)) {
@@ -19,20 +38,18 @@ export function truncateTail(
   maxLines = 50,
   maxBytes = 8192,
 ): { preview: string; truncated: boolean; totalLines: number } {
-  const lines = output.split("\n");
-
-  // A single trailing newline denotes line termination, not an extra empty line.
-  let totalLines = lines.length;
-  if (totalLines > 0 && lines[totalLines - 1] === "") {
-    totalLines -= 1;
-  }
+  // A single trailing newline terminates the last line — it is not an extra empty line.
+  const lines = output.endsWith("\n") ? output.slice(0, -1).split("\n") : output.split("\n");
+  const totalLines = output === "" ? 0 : lines.length;
 
   const kept = lines.slice(-maxLines);
   let preview = kept.join("\n");
   let truncated = kept.length < lines.length;
 
-  if (Buffer.byteLength(preview) > maxBytes) {
-    preview = preview.slice(-maxBytes);
+  const buf = Buffer.from(preview, "utf8");
+  if (buf.byteLength > maxBytes) {
+    // Cap in the byte domain (maxBytes is bytes, not UTF-16 code units).
+    preview = buf.subarray(buf.byteLength - maxBytes).toString("utf8");
     truncated = true;
   }
 
@@ -50,27 +67,39 @@ function runCommand(cmd: string, dir: string, timeoutMs: number): Promise<RunOut
   return new Promise((resolve) => {
     const start = Date.now();
     const child = spawn("sh", ["-c", cmd], { cwd: dir, env: process.env, detached: true });
+    const pid = child.pid;
+    if (pid !== undefined) {
+      activeGroups.add(pid);
+    }
 
-    let output = "";
+    const chunks: Buffer[] = [];
+    let bytes = 0;
     let timedOut = false;
     let settled = false;
 
+    // Collect stdout and stderr interleaved (as chunks arrive), decoded once at the end
+    // so a multi-byte UTF-8 sequence split across two chunks is not corrupted.
+    const append = (chunk: Buffer) => {
+      chunks.push(chunk);
+      bytes += chunk.length;
+      while (bytes > MAX_CAPTURE_BYTES && chunks.length > 1) {
+        const dropped = chunks.shift();
+        bytes -= dropped ? dropped.length : 0;
+      }
+    };
+    child.stdout?.on("data", append);
+    child.stderr?.on("data", append);
+
     const timer = setTimeout(() => {
       timedOut = true;
-      if (child.pid !== undefined) {
+      if (pid !== undefined) {
         try {
-          process.kill(-child.pid, "SIGKILL");
+          process.kill(-pid, "SIGKILL");
         } catch {
           // Process group already exited (ESRCH); nothing to kill.
         }
       }
     }, timeoutMs);
-
-    const append = (chunk: Buffer) => {
-      output += chunk.toString();
-    };
-    child.stdout?.on("data", append);
-    child.stderr?.on("data", append);
 
     const finish = (exitCode: number | null) => {
       if (settled) {
@@ -78,11 +107,25 @@ function runCommand(cmd: string, dir: string, timeoutMs: number): Promise<RunOut
       }
       settled = true;
       clearTimeout(timer);
-      resolve({ exitCode, timedOut, output, durationMs: Date.now() - start });
+      if (pid !== undefined) {
+        activeGroups.delete(pid);
+      }
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+      resolve({
+        exitCode,
+        timedOut,
+        output: Buffer.concat(chunks).toString("utf8"),
+        durationMs: Date.now() - start,
+      });
     };
 
+    // Resolve on 'exit' (the process itself terminating), NOT 'close' — 'close' also waits
+    // on every inherited pipe holder, so a lingering grandchild would block us until the
+    // timeout and mis-report a passing command as a timeout. setImmediate lets already-queued
+    // stdout/stderr 'data' events flush before we snapshot the output.
+    child.on("exit", (code) => setImmediate(() => finish(code)));
     child.on("error", () => finish(null));
-    child.on("close", (code) => finish(code));
   });
 }
 
@@ -123,9 +166,15 @@ async function runProfile(
     if (status === "failed") {
       const { preview, truncated, totalLines } = truncateTail(output);
       if (truncated) {
-        const logPath = join(ensureLogDir(), `${name}-${i + 1}.log`);
-        writeFileSync(logPath, output);
-        result.truncation = { totalLines, logPath };
+        // Persisting the full log is best-effort: a filesystem error here must NOT turn a
+        // normal failed-check result into an isError response.
+        try {
+          const logPath = join(ensureLogDir(), `${name}-${i + 1}.log`);
+          writeFileSync(logPath, output);
+          result.truncation = { totalLines, logPath };
+        } catch {
+          // Keep the tail preview; drop the full-log reference.
+        }
       }
       result.preview = preview;
       commands.push(result);

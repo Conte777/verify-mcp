@@ -43,11 +43,13 @@ function formatCommand(command: CommandResult, lines: string[]): void {
 
 function formatSection(result: ProfileResult): string {
   const total = result.commands.length;
-  const passedCount = result.commands.filter((c) => c.status === "passed").length;
+  // Numerator is how many commands actually ran (passed + failed), not just the passing
+  // ones — matches the spec's "## go (2/3)" for a build✓/test✗/vet⏭ run.
+  const ran = result.commands.filter((c) => c.status !== "skipped").length;
   if (result.passed) {
-    return `## ${result.profile} (${passedCount}/${total}) — all passed`;
+    return `## ${result.profile} (${ran}/${total}) — all passed`;
   }
-  const lines = [`## ${result.profile} (${passedCount}/${total})`];
+  const lines = [`## ${result.profile} (${ran}/${total})`];
   for (const command of result.commands) {
     formatCommand(command, lines);
   }
