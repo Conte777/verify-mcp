@@ -3,10 +3,32 @@
   "version": "0.1.0",
   "description": "MCP server that runs configured verification checks (tests, linters, build) for a project and reports failures",
   "type": "module",
+  "bin": {
+    "verify-mcp": "./dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "claude",
+    "claude-code",
+    "verify",
+    "lint",
+    "test",
+    "ci"
+  ],
+  "license": "MIT",
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test test/*.test.ts"
+    "test": "tsx --test test/*.test.ts",
+    "prepare": "npm run build",
+    "prepublishOnly": "npm run typecheck && npm test"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
