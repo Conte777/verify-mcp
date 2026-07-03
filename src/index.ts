@@ -1,11 +1,14 @@
 #!/usr/bin/env node
+import { createRequire } from "node:module";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { handleVerify } from "./handler.js";
 import { killActiveChildren } from "./runner.js";
 
-const server = new McpServer({ name: "verify-mcp", version: "0.1.0" });
+const { version } = createRequire(import.meta.url)("../package.json") as { version: string };
+
+const server = new McpServer({ name: "verify-mcp", version });
 
 server.registerTool(
   "verify",
