@@ -63,7 +63,7 @@ interface RunOutcome {
   durationMs: number;
 }
 
-function runCommand(cmd: string, dir: string, timeoutMs: number): Promise<RunOutcome> {
+export function runCommand(cmd: string, dir: string, timeoutMs: number): Promise<RunOutcome> {
   return new Promise((resolve) => {
     const start = Date.now();
     const child = spawn("sh", ["-c", cmd], { cwd: dir, env: process.env, detached: true });
@@ -140,7 +140,7 @@ function skippedResult(command: string): CommandResult {
   };
 }
 
-async function runProfile(
+export async function runProfile(
   name: string,
   profile: Profile,
   dir: string,
